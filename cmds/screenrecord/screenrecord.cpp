@@ -57,6 +57,13 @@ static const uint32_t kFallbackHeight = 720;
 static const uint32_t kAudioSampleRate = 22050;
 static const uint32_t kSamplesPerFrame = 2048;
 
+// Build-time parameters.
+#ifdef LANDSCAPE_ONLY
+static bool gLandscapeOnly = true;          // Only encode in landscape
+#else
+static bool gLandscapeOnly = false;
+#endif
+
 // Command-line parameters.
 static bool gVerbose = false;               // chatty on stdout
 static bool gRotate = false;                // rotate 90 degrees
@@ -693,6 +700,17 @@ static status_t recordScreen(const char* fileName) {
         gVideoHeight = rotated ? mainDpyInfo.w : mainDpyInfo.h;
     }
 
+    // Some devices cannot handle encoding tall height (> 720), so we
+    // compensate by encoding in landscape and rotating
+    bool autoRotated = false;
+    if (gLandscapeOnly && !gSizeSpecified && gVideoHeight > gVideoWidth) {
+        int newWidth = gVideoHeight;
+        gVideoHeight = gVideoWidth;
+        gVideoWidth = newWidth;
+        gRotate = !gRotate;
+        autoRotated = true;
+    }
+
     // Configure and start the encoder.
     sp<MediaCodec> videoEncoder;
     sp<MediaCodec> audioEncoder;
@@ -743,7 +761,7 @@ static status_t recordScreen(const char* fileName) {
     sp<MediaMuxer> muxer = new MediaMuxer(fileName,
             MediaMuxer::OUTPUT_FORMAT_MPEG_4);
     if (gRotate) {
-        muxer->setOrientationHint(90);
+        muxer->setOrientationHint(autoRotated ? 270 : 90);
     }
 
     // Main encoder loop.
