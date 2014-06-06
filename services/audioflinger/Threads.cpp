@@ -1404,8 +1404,10 @@ sp<AudioFlinger::PlaybackThread::Track> AudioFlinger::PlaybackThread::createTrac
             track = TimedTrack::create(this, client, streamType, sampleRate, format,
                     channelMask, frameCount, sharedBuffer, sessionId, uid);
         }
+
         if (track == 0 || track->getCblk() == NULL || track->name() < 0) {
             lStatus = NO_MEMORY;
+            // track must be cleared from the caller as the caller has the AF lock
             goto Exit;
         }
 
@@ -2003,7 +2005,7 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
     // otherwise use the HAL / AudioStreamOut directly
     } else {
         // Direct output and offload threads
-        size_t offset = (mCurrentWriteLength - mBytesRemaining) / sizeof(int16_t);
+        size_t offset = (mCurrentWriteLength - mBytesRemaining);
         if (mUseAsyncWrite) {
             ALOGW_IF(mWriteAckSequence & 1, "threadLoop_write(): out of sequence write request");
             mWriteAckSequence += 2;
@@ -2014,7 +2016,7 @@ ssize_t AudioFlinger::PlaybackThread::threadLoop_write()
         // FIXME We should have an implementation of timestamps for direct output threads.
         // They are used e.g for multichannel PCM playback over HDMI.
         bytesWritten = mOutput->stream->write(mOutput->stream,
-                                                   mMixBuffer + offset, mBytesRemaining);
+                                                   (char *)mMixBuffer + offset, mBytesRemaining);
         if (mUseAsyncWrite &&
                 ((bytesWritten < 0) || (bytesWritten == (ssize_t)mBytesRemaining))) {
             // do not wait for async callback in case of error of full write
@@ -2101,7 +2103,16 @@ void AudioFlinger::PlaybackThread::invalidateTracks(audio_stream_type_t streamTy
 
 void AudioFlinger::PlaybackThread::onFatalError()
 {
-    invalidateTracks(AUDIO_STREAM_MUSIC);
+    size_t size = mTracks.size();
+    for (size_t i = 0; i < size; i++) {
+        sp<Track> t = mTracks[i];
+        if ((t->streamType() == AUDIO_STREAM_MUSIC)
+               && (t->isOffloaded())) {
+            //call invalidate for offload tracks
+            t->invalidate();
+        }
+    }
+
 }
 
 
@@ -2473,6 +2484,9 @@ bool AudioFlinger::PlaybackThread::threadLoop()
                 if (mBytesRemaining) {
                     ssize_t ret = threadLoop_write();
                     if (ret < 0) {
+                        mBytesRemaining = 0;
+                    } else if(ret > mBytesRemaining) {
+                        mBytesWritten += mBytesRemaining;
                         mBytesRemaining = 0;
                     } else {
                         mBytesWritten += ret;
@@ -4036,8 +4050,8 @@ bool AudioFlinger::AsyncCallbackThread::threadLoop()
         {
             Mutex::Autolock _l(mLock);
             while (!((mWriteAckSequence & 1) ||
-                            (mDrainSequence & 1) ||
-                            exitPending())) {
+                     (mDrainSequence & 1) ||
+                     exitPending())) {
                 mWaitWorkCV.wait(mLock);
             }
 
