@@ -55,6 +55,8 @@ static int64_t kDefaultKeepAliveTimeoutUs = 60000000ll;
 
 static int64_t kPauseDelayUs = 3000000ll;
 
+static int64_t kTearDownTimeoutUs = 3000000ll;
+
 namespace android {
 
 static bool GetAttribute(const char *s, const char *key, AString *value) {
@@ -162,6 +164,7 @@ struct MyHandler : public AHandler {
         }
 
         mSessionHost = host;
+        mAUTimeoutCheck = true;
     }
 
     void connect() {
@@ -221,6 +224,10 @@ struct MyHandler : public AHandler {
 
     bool isSeekable() const {
         return mSeekable;
+    }
+
+    void setAUTimeoutCheck(bool value) {
+        mAUTimeoutCheck = value;
     }
 
     void pause() {
@@ -897,6 +904,15 @@ struct MyHandler : public AHandler {
                 request.append("\r\n");
 
                 mConn->sendRequest(request.c_str(), reply);
+
+                // If the response of teardown hasn't been received in 3 seconds,
+                // post 'tear' message to avoid ANR.
+                if (!msg->findInt32("reconnect", &reconnect) || !reconnect) {
+                    sp<AMessage> teardown = new AMessage('tear', id());
+                    teardown->setInt32("result", -ECONNABORTED);
+                    teardown->post(kTearDownTimeoutUs);
+                }
+
                 break;
             }
 
@@ -948,7 +964,18 @@ struct MyHandler : public AHandler {
                 }
 
                 mNumAccessUnitsReceived = 0;
-                msg->post(kAccessUnitTimeoutUs);
+
+                // The access unit timeout check should happen only during playback and
+                // the posting of AU timeout check should not happen, if pause is not called from
+                // RTSPSource when the stream is nearing EOS
+                if (mAUTimeoutCheck) {
+                    ALOGV("Posting AU timeout check mCheckPending:%d", mCheckPending);
+                    msg->post(kAccessUnitTimeoutUs);
+                } else {
+                    ALOGI("Not Posting AU timeout check mAUTimeoutCheck:%d", mAUTimeoutCheck);
+                    mAUTimeoutCheck = true;
+                    break;
+                }
                 break;
             }
 
@@ -1182,6 +1209,14 @@ struct MyHandler : public AHandler {
                 request.append("\r\n");
 
                 mConn->sendRequest(request.c_str(), reply);
+
+                // After seek, the previous packets are obsolete
+                for (int i = 0; i < mTracks.size(); i++) {
+                    TrackInfo *track = &mTracks.editItemAt(i);
+                    if (!track->mPackets.empty()) {
+                        track->mPackets.clear();
+                    }
+                }
                 break;
             }
 
@@ -1348,6 +1383,10 @@ struct MyHandler : public AHandler {
                 TRESPASS();
                 break;
         }
+    }
+
+    int32_t getServerTimeoutMs() {
+        return mKeepAliveTimeoutUs / 1000;
     }
 
     void postKeepAlive() {
@@ -1543,6 +1582,7 @@ private:
     Vector<TrackInfo> mTracks;
 
     bool mPlayResponseParsed;
+    bool mAUTimeoutCheck;
 
     void setupTrack(size_t index) {
         sp<APacketSource> source =

@@ -703,8 +703,9 @@ AudioPolicyService::AudioCommandThread::AudioCommandThread(String8 name,
 
 AudioPolicyService::AudioCommandThread::~AudioCommandThread()
 {
-    if (!mAudioCommands.isEmpty()) {
-        release_wake_lock(mName.string());
+    for (size_t k=0; k < mAudioCommands.size(); k++) {
+        delete mAudioCommands[k]->mParam;
+        delete mAudioCommands[k];
     }
     mAudioCommands.clear();
     delete mpToneGenerator;
@@ -823,10 +824,6 @@ bool AudioPolicyService::AudioCommandThread::threadLoop()
                 break;
             }
         }
-        // release delayed commands wake lock
-        if (mAudioCommands.isEmpty()) {
-            release_wake_lock(mName.string());
-        }
         ALOGV("AudioCommandThread() going to sleep");
         mWaitWorkCV.waitRelative(mLock, waitTime);
         ALOGV("AudioCommandThread() waking up");
@@ -877,7 +874,7 @@ void AudioPolicyService::AudioCommandThread::startToneCommand(ToneGenerator::ton
     ToneData *data = new ToneData();
     data->mType = type;
     data->mStream = stream;
-    command->mParam = (void *)data;
+    command->mParam = data;
     Mutex::Autolock _l(mLock);
     insertCommand_l(command);
     ALOGV("AudioCommandThread() adding tone start type %d, stream %d", type, stream);
@@ -978,7 +975,7 @@ void AudioPolicyService::AudioCommandThread::stopOutputCommand(audio_io_handle_t
     data->mIO = output;
     data->mStream = stream;
     data->mSession = session;
-    command->mParam = (void *)data;
+    command->mParam = data;
     Mutex::Autolock _l(mLock);
     insertCommand_l(command);
     ALOGV("AudioCommandThread() adding stop output %d", output);
@@ -991,7 +988,7 @@ void AudioPolicyService::AudioCommandThread::releaseOutputCommand(audio_io_handl
     command->mCommand = RELEASE_OUTPUT;
     ReleaseOutputData *data = new ReleaseOutputData();
     data->mIO = output;
-    command->mParam = (void *)data;
+    command->mParam = data;
     Mutex::Autolock _l(mLock);
     insertCommand_l(command);
     ALOGV("AudioCommandThread() adding release output %d", output);
@@ -1005,10 +1002,6 @@ void AudioPolicyService::AudioCommandThread::insertCommand_l(AudioCommand *comma
     Vector <AudioCommand *> removedCommands;
     command->mTime = systemTime() + milliseconds(delayMs);
 
-    // acquire wake lock to make sure delayed commands are processed
-    if (mAudioCommands.isEmpty()) {
-        acquire_wake_lock(PARTIAL_WAKE_LOCK, mName.string());
-    }
 
     // check same pending commands with later time stamps and eliminate them
     for (i = mAudioCommands.size()-1; i >= 0; i--) {
@@ -1082,6 +1075,10 @@ void AudioPolicyService::AudioCommandThread::insertCommand_l(AudioCommand *comma
         for (size_t k = i + 1; k < mAudioCommands.size(); k++) {
             if (mAudioCommands[k] == removedCommands[j]) {
                 ALOGV("suppressing command: %d", mAudioCommands[k]->mCommand);
+                // for commands that are not filtered,
+                // command->mParam is deleted in threadLoop
+                delete mAudioCommands[k]->mParam;
+                delete mAudioCommands[k];
                 mAudioCommands.removeAt(k);
                 break;
             }

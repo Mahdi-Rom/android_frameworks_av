@@ -595,6 +595,14 @@ void CameraParameters::set(const char *key, const char *value)
         //XXX ALOGE("Value \"%s\"contains invalid character (= or ;)", value);
         return;
     }
+#ifdef QCOM_HARDWARE
+    // qcom cameras default to delivering an extra zero-exposure frame on HDR.
+    // The android SDK only wants one frame, so disable this unless the app
+    // explicitly asks for it
+    if (!get("hdr-need-1x")) {
+        mMap.replaceValueFor(String8("hdr-need-1x"), String8("false"));
+    }
+#endif
 
     mMap.replaceValueFor(String8(key), String8(value));
 }
@@ -808,6 +816,15 @@ void CameraParameters::getPreviewFpsRange(int *min_fps, int *max_fps) const
     if (p == 0) return;
     parse_pair(p, min_fps, max_fps, ',');
 }
+
+#ifdef HTC_CAMERA_HARDWARE
+void CameraParameters::getBrightnessLumaTargetSet(int *magic, int *sauce) const
+{
+}
+void CameraParameters::getRawSize(int *magic, int *sauce) const
+{
+}
+#endif
 
 #ifdef QCOM_HARDWARE
 void CameraParameters::setPreviewFrameRateMode(const char *mode)

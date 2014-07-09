@@ -121,13 +121,6 @@ AudioSource::AudioSource(
                     frameCount);
         mInitCheck = mRecord->initCheck();
         mAutoRampStartUs = kAutoRampStartUs;
-        uint32_t playbackLatencyMs = 0;
-        if (AudioSystem::getOutputLatency(&playbackLatencyMs,
-                                          AUDIO_STREAM_DEFAULT) == OK) {
-            if (2*playbackLatencyMs*1000LL > kAutoRampStartUs) {
-                mAutoRampStartUs = 2*playbackLatencyMs*1000LL;
-            }
-        }
         ALOGD("Start autoramp from %lld", mAutoRampStartUs);
     } else {
         mInitCheck = status;
@@ -193,7 +186,7 @@ AudioSource::AudioSource( audio_source_t inputSource, const sp<MetaData>& meta )
 #ifdef QCOM_DIRECTTRACK
                 4*mMaxBufferSize/channels/frameSize,
 #else
-                4*mMaxBufferSize,
+                4*mMaxBufferSize/channels,
 #endif
                 AudioRecordCallbackFunction,
                 this);
